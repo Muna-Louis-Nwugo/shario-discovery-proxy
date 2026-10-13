@@ -7,10 +7,13 @@ never left trusted hands, but a real database credential has no business
 being baked into a binary anyone can download. This Worker is the only
 thing that holds that credential now; `shario` just talks plain HTTP to it.
 
-It does exactly two things, matching exactly what `shario` needs:
+It does exactly three things, matching exactly what `shario` needs:
 
 - `POST /sessions/:name` (body = ticket bytes) — registers a new session.
   `201` if the name was free, `409` if it's already taken.
+- `PUT /sessions/:name` (body = ticket bytes) — unconditionally updates an
+  existing session's stored ticket (used once, right after a session's
+  creator learns its own endpoint id). `204` always; never claims a name.
 - `GET /sessions/:name` — looks up an existing session. `200` + ticket bytes,
   or `404` if it doesn't exist.
 

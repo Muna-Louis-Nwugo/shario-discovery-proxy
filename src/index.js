@@ -7,8 +7,11 @@
 // Upstash credential (as Worker secrets, never committed anywhere); `shario`
 // just talks plain HTTP to it instead.
 //
-// Exactly two things, matching exactly what `shario` needs -- nothing else:
+// Exactly three things, matching exactly what `shario` needs -- nothing else:
 //   POST /sessions/:name  body = ticket bytes -> 201, or 409 if taken
+//   PUT  /sessions/:name  body = ticket bytes -> 204 (unconditional update --
+//        only used to refresh a session shario itself just created, once its
+//        own endpoint id is known, never to claim a name)
 //   GET  /sessions/:name                      -> 200 + ticket bytes, or 404
 //
 // Uses Upstash's REST API (not the raw Redis protocol), since Workers can't
@@ -31,6 +34,20 @@ async function upstash(env, command) {
 
 export default {
   async fetch(request, env) {
+    try {
+      return await handle(request, env);
+    } catch (err) {
+      // surface the real failure instead of Cloudflare's generic opaque
+      // error page -- this is the outermost boundary, nothing above it to
+      // hand a thrown error to
+      return new Response(`Unhandled proxy error: ${err.stack || err}`, {
+        status: 500,
+      });
+    }
+  },
+};
+
+async function handle(request, env) {
     const url = new URL(request.url);
     const match = url.pathname.match(SESSION_PATH);
     if (!match) {
@@ -69,6 +86,28 @@ export default {
       return new Response(null, { status: 201 });
     }
 
+    if (request.method === "PUT") {
+      const ticket = await request.text();
+      if (!ticket) {
+        return new Response("Missing ticket body", { status: 400 });
+      }
+
+      // unconditional -- the caller already owns this name, just updating
+      // its stored ticket, so no NX here
+      const { error } = await upstash(env, [
+        "SET",
+        name,
+        ticket,
+        "EX",
+        String(TTL_SECONDS),
+      ]);
+
+      if (error) {
+        return new Response(error, { status: 502 });
+      }
+      return new Response(null, { status: 204 });
+    }
+
     if (request.method === "GET") {
       const { result, error } = await upstash(env, ["GET", name]);
 
@@ -85,5 +124,4 @@ export default {
     }
 
     return new Response("Method not allowed", { status: 405 });
-  },
-};
+}
